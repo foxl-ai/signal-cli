@@ -44,6 +44,22 @@ curve25519-dalek = { git = 'https://github.com/signalapp/curve25519-dalek', tag 
 quickcheck_async = { git = 'https://github.com/nytopop/quickcheck_async', rev = '76b13525ca93e0725e757f841fc6ccab8bae1913' }
 libsqlite3-sys = { version = "0.36.0", git = "https://github.com/whisperfish/rusqlite", rev = '2a42b3354c9194700d08aa070f70a131a470e7dc' }
 
+[package.metadata.deb]
+maintainer = "didhd"
+section = "net"
+priority = "optional"
+assets = [
+    ["target/release/signal-cli", "usr/bin/", "755"],
+    ["target/release/signal-mcp", "usr/bin/", "755"],
+]
+extended-description = "A lightweight, cross-platform Signal messenger CLI built on libsignal/presage with MCP server support for AI integration."
+
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/signal-cli", dest = "/usr/bin/signal-cli", mode = "755" },
+    { source = "target/release/signal-mcp", dest = "/usr/bin/signal-mcp", mode = "755" },
+]
+
 [profile.release]
 opt-level = "z"
 lto = true

@@ -25,6 +25,9 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             name: signal-cli-linux-x86_64
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            name: signal-cli-linux-aarch64
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             name: signal-cli-windows-x86_64
@@ -38,21 +41,29 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install dependencies (Linux)
-        if: runner.os == 'Linux'
+      - name: Install cross-compilation tools (Linux aarch64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+            protobuf-compiler cmake pkg-config libssl-dev
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++" >> $GITHUB_ENV
+
+      - name: Install dependencies (Linux x86_64)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler cmake pkg-config libssl-dev
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
-        run: |
-          brew install protobuf cmake
+        run: brew install protobuf cmake
 
       - name: Install dependencies (Windows)
         if: runner.os == 'Windows'
-        run: |
-          choco install protoc cmake -y
+        run: choco install protoc cmake -y
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -67,30 +78,147 @@ jobs:
       - name: Build release
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package (Unix)
+      # --- tar.gz for all Unix ---
+      - name: Package tar.gz (Unix)
         if: runner.os != 'Windows'
         run: |
           mkdir -p dist
           cp target/${{ matrix.target }}/release/signal-cli dist/ 2>/dev/null || true
           cp target/${{ matrix.target }}/release/signal-mcp dist/ 2>/dev/null || true
+          chmod +x dist/*
           cd dist && tar czf ../${{ matrix.name }}.tar.gz *
 
+      # --- .deb package (Linux only) ---
+      - name: Build .deb package
+        if: startsWith(matrix.target, 'x86_64-unknown-linux')
+        run: |
+          cargo install cargo-deb --locked || true
+          cargo deb --target ${{ matrix.target }} --no-build --no-strip \
+            || echo "cargo-deb failed, building manually"
+
+          # Manual .deb if cargo-deb fails
+          if [ ! -f target/${{ matrix.target }}/debian/*.deb ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            PKG_DIR="signal-cli-rust_${VERSION}_amd64"
+            mkdir -p "${PKG_DIR}/DEBIAN"
+            mkdir -p "${PKG_DIR}/usr/bin"
+            cp target/${{ matrix.target }}/release/signal-cli "${PKG_DIR}/usr/bin/"
+            cp target/${{ matrix.target }}/release/signal-mcp "${PKG_DIR}/usr/bin/"
+            cat > "${PKG_DIR}/DEBIAN/control" << EOF
+          Package: signal-cli-rust
+          Version: ${VERSION}
+          Section: net
+          Priority: optional
+          Architecture: amd64
+          Maintainer: didhd
+          Description: Lightweight Signal CLI in Rust with MCP support
+           A cross-platform Signal messenger CLI built on libsignal/presage.
+          EOF
+            dpkg-deb --build "${PKG_DIR}"
+            mv "${PKG_DIR}.deb" "signal-cli-rust_${VERSION}_amd64.deb"
+          fi
+
+      # --- .rpm package (Linux only) ---
+      - name: Build .rpm package
+        if: startsWith(matrix.target, 'x86_64-unknown-linux')
+        run: |
+          cargo install cargo-generate-rpm --locked || true
+          cargo generate-rpm --target ${{ matrix.target }} \
+            || echo "cargo-generate-rpm not configured, building manually"
+
+          if [ ! -f target/${{ matrix.target }}/generate-rpm/*.rpm ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            sudo apt-get install -y rpm
+            mkdir -p rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+            mkdir -p rpmbuild/BUILD/usr/bin
+            cp target/${{ matrix.target }}/release/signal-cli rpmbuild/BUILD/usr/bin/
+            cp target/${{ matrix.target }}/release/signal-mcp rpmbuild/BUILD/usr/bin/
+            cat > rpmbuild/SPECS/signal-cli-rust.spec << 'SPEC'
+          Name: signal-cli-rust
+          Version: VERSION_PLACEHOLDER
+          Release: 1
+          Summary: Lightweight Signal CLI in Rust
+          License: AGPL-3.0
+          BuildArch: x86_64
+
+          %description
+          A cross-platform Signal messenger CLI built on libsignal/presage with MCP support.
+
+          %install
+          mkdir -p %{buildroot}/usr/bin
+          cp %{_builddir}/usr/bin/signal-cli %{buildroot}/usr/bin/
+          cp %{_builddir}/usr/bin/signal-mcp %{buildroot}/usr/bin/
+
+          %files
+          /usr/bin/signal-cli
+          /usr/bin/signal-mcp
+          SPEC
+            sed -i "s/VERSION_PLACEHOLDER/${VERSION}/" rpmbuild/SPECS/signal-cli-rust.spec
+            rpmbuild --define "_topdir $(pwd)/rpmbuild" -bb rpmbuild/SPECS/signal-cli-rust.spec
+            cp rpmbuild/RPMS/x86_64/*.rpm "signal-cli-rust-${VERSION}.x86_64.rpm" || true
+          fi
+
+      # --- DMG (macOS only) ---
+      - name: Build DMG (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p dmg_contents
+          cp target/${{ matrix.target }}/release/signal-cli dmg_contents/
+          cp target/${{ matrix.target }}/release/signal-mcp dmg_contents/
+          chmod +x dmg_contents/*
+
+          # Create install script inside DMG
+          cat > dmg_contents/install.sh << 'INSTALL'
+          #!/bin/bash
+          set -e
+          INSTALL_DIR="/usr/local/bin"
+          echo "Installing signal-cli to ${INSTALL_DIR}..."
+          SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+          sudo cp "${SCRIPT_DIR}/signal-cli" "${INSTALL_DIR}/"
+          sudo cp "${SCRIPT_DIR}/signal-mcp" "${INSTALL_DIR}/"
+          sudo chmod +x "${INSTALL_DIR}/signal-cli" "${INSTALL_DIR}/signal-mcp"
+          echo "Done! Run 'signal-cli --help' to get started."
+          echo "To link with your Signal account: signal-cli link-device -n \"my-cli\""
+          INSTALL
+          chmod +x dmg_contents/install.sh
+
+          hdiutil create -volname "Signal CLI" -srcfolder dmg_contents \
+            -ov -format UDZO "${{ matrix.name }}.dmg"
+
+      # --- Windows zip ---
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist
-          Copy-Item "target/${{ matrix.target }}/release/signal-cli.exe" "dist/" -ErrorAction SilentlyContinue
-          Copy-Item "target/${{ matrix.target }}/release/signal-mcp.exe" "dist/" -ErrorAction SilentlyContinue
+          Copy-Item "target/${{ matrix.target }}/release/signal-cli.exe" "dist/"
+          Copy-Item "target/${{ matrix.target }}/release/signal-mcp.exe" "dist/"
+          # Create install.ps1
+          @'
+          $InstallDir = "$env:LOCALAPPDATA\signal-cli"
+          New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+          Copy-Item "signal-cli.exe" "$InstallDir\" -Force
+          Copy-Item "signal-mcp.exe" "$InstallDir\" -Force
+          $path = [Environment]::GetEnvironmentVariable("PATH", "User")
+          if ($path -notlike "*$InstallDir*") {
+              [Environment]::SetEnvironmentVariable("PATH", "$path;$InstallDir", "User")
+              Write-Host "Added $InstallDir to PATH"
+          }
+          Write-Host "Installed! Restart your terminal, then run: signal-cli --help"
+          Write-Host "To link with Signal: signal-cli link-device -n 'my-cli'"
+          '@ | Out-File -FilePath "dist\install.ps1" -Encoding utf8
           Compress-Archive -Path dist/* -DestinationPath "${{ matrix.name }}.zip"
 
-      - name: Upload artifact
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
           path: |
             ${{ matrix.name }}.tar.gz
             ${{ matrix.name }}.zip
+            ${{ matrix.name }}.dmg
+            *.deb
+            *.rpm
 
   release:
     needs: build
@@ -110,3 +238,6 @@ jobs:
           files: |
             artifacts/**/*.tar.gz
             artifacts/**/*.zip
+            artifacts/**/*.dmg
+            artifacts/**/*.deb
+            artifacts/**/*.rpm
