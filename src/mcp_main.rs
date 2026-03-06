@@ -196,6 +196,19 @@ impl McpServer {
                         }
                     },
                     {
+                        "name": "list_messages",
+                        "description": "List stored messages from local database for a specific contact or group thread",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "contact_uuid": { "type": "string", "description": "Contact UUID to list messages for (mutually exclusive with group_master_key)" },
+                                "group_master_key": { "type": "string", "description": "Group master key (hex) to list messages for (mutually exclusive with contact_uuid)" },
+                                "from_timestamp": { "type": "integer", "description": "Only return messages after this UNIX timestamp (milliseconds)" },
+                                "limit": { "type": "integer", "description": "Maximum number of messages to return (default: 50)" }
+                            }
+                        }
+                    },
+                    {
                         "name": "link_device",
                         "description": "Link this CLI as a secondary device to an existing Signal account. Returns a provisioning URL and QR code text that the user must scan with their Signal mobile app (Settings > Linked Devices > Link New Device). The tool will wait for the linking to complete and return account info on success.",
                         "inputSchema": {
@@ -379,7 +392,8 @@ impl McpServer {
 
             "receive_messages" => {
                 let store = self.open_store().await?;
-                let mut manager = Manager::load_registered(store).await?;
+                let mut manager: Manager<SqliteStore, Registered> =
+                    Manager::load_registered(store).await?;
                 let messages = manager.receive_messages().await?;
                 futures::pin_mut!(messages);
 
@@ -388,20 +402,72 @@ impl McpServer {
                     match content {
                         presage::model::messages::Received::QueueEmpty => break,
                         presage::model::messages::Received::Content(c) => {
-                            let body = match &c.body {
-                                ContentBody::DataMessage(DataMessage { body, .. }) => body.clone(),
-                                _ => None,
+                            let sender_id = c.metadata.sender;
+                            let sender_uuid = sender_id.service_id_string();
+
+                            // Try to resolve sender name from contacts
+                            let sender_name = manager
+                                .store()
+                                .contact_by_id(&sender_id)
+                                .await
+                                .ok()
+                                .flatten()
+                                .filter(|contact| !contact.name.is_empty())
+                                .map(|contact| contact.name);
+
+                            let (msg_type, body, attachments_count, group_info) = match &c.body {
+                                ContentBody::DataMessage(DataMessage {
+                                    body,
+                                    attachments,
+                                    group_v2,
+                                    ..
+                                }) => {
+                                    let group = group_v2.as_ref().and_then(|g| {
+                                        g.master_key
+                                            .as_ref()
+                                            .map(|k| json!({ "master_key": hex::encode(k) }))
+                                    });
+                                    ("message", body.clone(), attachments.len(), group)
+                                }
+                                ContentBody::SynchronizeMessage(presage::proto::SyncMessage {
+                                    sent:
+                                        Some(presage::proto::sync_message::Sent {
+                                            message:
+                                                Some(DataMessage {
+                                                    body, attachments, ..
+                                                }),
+                                            ..
+                                        }),
+                                    ..
+                                }) => ("sync_sent", body.clone(), attachments.len(), None),
+                                ContentBody::TypingMessage(_) => ("typing", None, 0, None),
+                                ContentBody::ReceiptMessage(_) => ("receipt", None, 0, None),
+                                ContentBody::CallMessage(_) => ("call", None, 0, None),
+                                _ => ("other", None, 0, None),
                             };
-                            received.push(json!({
+
+                            let mut msg = json!({
                                 "timestamp": c.metadata.timestamp,
-                                "sender": c.metadata.sender.service_id_string(),
+                                "sender_uuid": sender_uuid,
+                                "sender_name": sender_name,
+                                "type": msg_type,
                                 "body": body,
-                            }));
+                                "attachments_count": attachments_count,
+                            });
+
+                            if let Some(group) = group_info {
+                                msg["group"] = group;
+                            }
+
+                            received.push(msg);
                         }
                         _ => {}
                     }
                 }
-                Ok(json!(received))
+                Ok(json!({
+                    "messages": received,
+                    "count": received.len(),
+                }))
             }
 
             "whoami" => {
@@ -445,6 +511,83 @@ impl McpServer {
                     let _ = phone_str;
                     anyhow::bail!("CDSI feature not enabled")
                 }
+            }
+
+            "list_messages" => {
+                let store = self.open_store().await?;
+                let manager: Manager<SqliteStore, Registered> =
+                    Manager::load_registered(store).await?;
+
+                let contact_uuid = args.get("contact_uuid").and_then(|v| v.as_str());
+                let group_key = args.get("group_master_key").and_then(|v| v.as_str());
+                let from_ts = args
+                    .get("from_timestamp")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
+
+                let thread = if let Some(uuid_str) = contact_uuid {
+                    let service_id = ServiceId::parse_from_service_id_string(uuid_str)
+                        .context("invalid UUID format, expected ACI format like '12345678-...'")?;
+                    presage::store::Thread::Contact(service_id)
+                } else if let Some(key_hex) = group_key {
+                    let key_bytes = hex::decode(key_hex)?;
+                    let key: [u8; 32] = key_bytes
+                        .try_into()
+                        .map_err(|_| anyhow::anyhow!("group master key must be 32 bytes"))?;
+                    presage::store::Thread::Group(key)
+                } else {
+                    anyhow::bail!("provide either contact_uuid or group_master_key")
+                };
+
+                use presage::store::ContentsStore;
+                let mut messages_out = Vec::new();
+                for msg in manager
+                    .store()
+                    .messages(&thread, from_ts..)
+                    .await?
+                    .filter_map(Result::ok)
+                    .take(limit)
+                {
+                    let sender_uuid = msg.metadata.sender.service_id_string();
+                    let sender_name = manager
+                        .store()
+                        .contact_by_id(&msg.metadata.sender)
+                        .await
+                        .ok()
+                        .flatten()
+                        .filter(|c| !c.name.is_empty())
+                        .map(|c| c.name);
+
+                    let (msg_type, body) = match &msg.body {
+                        ContentBody::DataMessage(DataMessage { body, .. }) => {
+                            ("message", body.clone())
+                        }
+                        ContentBody::SynchronizeMessage(presage::proto::SyncMessage {
+                            sent:
+                                Some(presage::proto::sync_message::Sent {
+                                    message: Some(DataMessage { body, .. }),
+                                    ..
+                                }),
+                            ..
+                        }) => ("sync_sent", body.clone()),
+                        _ => ("other", None),
+                    };
+
+                    messages_out.push(json!({
+                        "timestamp": msg.metadata.timestamp,
+                        "sender_uuid": sender_uuid,
+                        "sender_name": sender_name,
+                        "type": msg_type,
+                        "body": body,
+                    }));
+                }
+
+                Ok(json!({
+                    "thread": format!("{thread}"),
+                    "messages": messages_out,
+                    "count": messages_out.len(),
+                }))
             }
 
             "link_device" => {
