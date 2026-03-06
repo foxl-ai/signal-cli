@@ -3,6 +3,7 @@ mod output;
 
 use anyhow::Context as _;
 use directories::ProjectDirs;
+use presage::libsignal_service::configuration::SignalServers;
 use presage::libsignal_service::content::{ContentBody, DataMessage};
 use presage::libsignal_service::protocol::ServiceId;
 use presage::manager::Registered;
@@ -192,6 +193,25 @@ impl McpServer {
                                 "phone_number": { "type": "string", "description": "Phone number in E.164 format" }
                             },
                             "required": ["phone_number"]
+                        }
+                    },
+                    {
+                        "name": "link_device",
+                        "description": "Link this CLI as a secondary device to an existing Signal account. Returns a provisioning URL and QR code text that the user must scan with their Signal mobile app (Settings > Linked Devices > Link New Device). The tool will wait for the linking to complete and return account info on success.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "device_name": {
+                                    "type": "string",
+                                    "description": "Name for this linked device (e.g. 'my-cli', 'work-laptop')"
+                                },
+                                "servers": {
+                                    "type": "string",
+                                    "description": "Signal server environment: 'production' (default) or 'staging'",
+                                    "default": "production"
+                                }
+                            },
+                            "required": ["device_name"]
                         }
                     }
                 ]
@@ -427,9 +447,130 @@ impl McpServer {
                 }
             }
 
+            "link_device" => {
+                let device_name = args
+                    .get("device_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("signal-cli-mcp")
+                    .to_string();
+
+                let servers_str = args
+                    .get("servers")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("production");
+
+                let servers: SignalServers = servers_str.parse().map_err(|_| {
+                    anyhow::anyhow!("invalid server: use 'production' or 'staging'")
+                })?;
+
+                let store = self.open_store().await?;
+                let (tx, rx) = futures::channel::oneshot::channel();
+
+                let link_future =
+                    Manager::link_secondary_device(store, servers, device_name.clone(), tx);
+
+                // Wait for the provisioning URL first, then wait for linking to complete
+                let (link_result, provisioning_url) =
+                    futures::future::join(link_future, async { rx.await.ok() }).await;
+
+                // Build response with provisioning info
+                let mut response = json!({
+                    "status": "linking",
+                    "device_name": device_name,
+                });
+
+                if let Some(url) = provisioning_url {
+                    let url_string = url.to_string();
+
+                    // Generate QR code as text art
+                    let qr_text = qr_to_text(&url_string);
+
+                    response = json!({
+                        "status": "provisioning_url_generated",
+                        "device_name": device_name,
+                        "provisioning_url": url_string,
+                        "qr_code": qr_text,
+                        "instructions": "Show the QR code or URL to the user. They must scan it with their Signal mobile app: Settings > Linked Devices > Link New Device. The linking process is waiting for the scan to complete."
+                    });
+                }
+
+                // Check if linking succeeded
+                match link_result {
+                    Ok(manager) => {
+                        let whoami = manager.whoami().await;
+                        match whoami {
+                            Ok(who) => Ok(json!({
+                                "status": "linked",
+                                "device_name": device_name,
+                                "aci": who.aci.to_string(),
+                                "message": format!("Successfully linked as '{device_name}'! Account UUID: {}", who.aci)
+                            })),
+                            Err(_) => Ok(json!({
+                                "status": "linked",
+                                "device_name": device_name,
+                                "message": format!("Successfully linked as '{device_name}'!")
+                            })),
+                        }
+                    }
+                    Err(e) => {
+                        // If we got a provisioning URL, include it in the error so the user
+                        // can still try scanning
+                        if response.get("provisioning_url").is_some() {
+                            response["status"] = json!("waiting_for_scan");
+                            response["note"] = json!(format!(
+                                "The provisioning URL was generated but linking hasn't completed yet. \
+                                 The user needs to scan the QR code. Error details: {e}"
+                            ));
+                            Ok(response)
+                        } else {
+                            Err(anyhow::anyhow!("linking failed: {e}"))
+                        }
+                    }
+                }
+            }
+
             _ => anyhow::bail!("unknown tool: {name}"),
         }
     }
+}
+
+/// Convert a URL string to a QR code rendered as Unicode text
+fn qr_to_text(data: &str) -> String {
+    use std::fmt::Write;
+
+    // Use the qr2term crate's underlying qr code generation
+    let qr = match qrcode::QrCode::new(data.as_bytes()) {
+        Ok(qr) => qr,
+        Err(_) => return format!("(Could not generate QR code. Use URL directly: {data})"),
+    };
+
+    let colors = qr.to_colors();
+    let width = qr.width();
+    let mut result = String::new();
+
+    // Unicode block elements for compact QR rendering
+    // Each character represents 2 vertical pixels
+    for y in (0..width).step_by(2) {
+        for x in 0..width {
+            let top = colors[y * width + x];
+            let bottom = if y + 1 < width {
+                colors[(y + 1) * width + x]
+            } else {
+                qrcode::Color::Light
+            };
+
+            let ch = match (top, bottom) {
+                (qrcode::Color::Dark, qrcode::Color::Dark) => '\u{2588}', // Full block
+                (qrcode::Color::Dark, qrcode::Color::Light) => '\u{2580}', // Upper half
+                (qrcode::Color::Light, qrcode::Color::Dark) => '\u{2584}', // Lower half
+                (qrcode::Color::Light, qrcode::Color::Light) => ' ',      // Empty
+            };
+            let _ = write!(result, "{ch}");
+        }
+        result.push('\n');
+    }
+
+    result
 }
 
 fn main() -> anyhow::Result<()> {
