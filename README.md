@@ -153,9 +153,11 @@ Add to your MCP config:
 | `send_message_by_phone` | Send message by phone number |
 | `list_contacts` | List all contacts |
 | `list_groups` | List all groups |
-| `receive_messages` | Receive pending messages |
+| `receive_messages` | Receive pending messages (with sender names, types, attachments) |
+| `list_messages` | Query stored message history for a contact or group |
 | `whoami` | Get account info |
 | `resolve_phone` | Resolve phone to UUID |
+| `link_device` | Link as secondary device (returns QR code + provisioning URL) |
 
 ## Build from source
 
@@ -177,8 +179,7 @@ cargo build --release
 
 | Platform | Architecture | Status |
 |----------|-------------|--------|
-| macOS | aarch64 (Apple Silicon) | Supported |
-| macOS | x86_64 (Intel) | Supported |
-| Linux | x86_64 | Supported |
-| Linux | aarch64 | Supported |
-| Windows | x86_64 | Supported |
+| macOS | aarch64 (Apple Silicon) | Supported (DMG + tar.gz) |
+| macOS | x86_64 (Intel) | Supported (DMG + tar.gz) |
+| Linux | x86_64 | Supported (.deb + .rpm + tar.gz) |
+| Windows | x86_64 | Build from source (sqlcipher issue) |
