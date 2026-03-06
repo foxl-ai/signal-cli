@@ -308,52 +308,77 @@ pub async fn run<S: Store + Send>(
         } => {
             let mut manager = load_registered(store).await?;
             let tmp_dir = attachments_tmp_dir()?;
-            let messages = manager
-                .receive_messages()
-                .await
-                .context("failed to start receiving")?;
-            pin_mut!(messages);
+            let mut retry_count: u32 = 0;
+            let max_retries = if stop_after_empty_queue { 0 } else { u32::MAX };
 
-            while let Some(content) = messages.next().await {
-                match content {
-                    Received::QueueEmpty => {
-                        println!("-- queue empty --");
-                        if stop_after_empty_queue {
-                            break;
+            loop {
+                info!("connecting to message stream...");
+                let messages = match manager.receive_messages().await {
+                    Ok(m) => m,
+                    Err(e) => {
+                        if retry_count >= max_retries {
+                            return Err(e.into());
                         }
+                        retry_count += 1;
+                        let delay = std::cmp::min(retry_count * 2, 30);
+                        tracing::warn!(
+                            "failed to connect (attempt {retry_count}), retrying in {delay}s: {e}"
+                        );
+                        tokio::time::sleep(std::time::Duration::from_secs(delay as u64)).await;
+                        continue;
                     }
-                    Received::Contacts => println!("-- contacts synced --"),
-                    Received::Content(content) => {
-                        print_content(&manager, &content, &format).await;
+                };
+                pin_mut!(messages);
+                retry_count = 0; // reset on successful connection
 
-                        // Save attachments
-                        if let ContentBody::DataMessage(DataMessage { attachments, .. }) =
-                            &content.body
-                        {
-                            for ap in attachments {
-                                if let Ok(data) = manager.get_attachment(ap).await {
-                                    let ext = mime_guess::get_mime_extensions_str(
-                                        ap.content_type
-                                            .as_deref()
-                                            .unwrap_or("application/octet-stream"),
-                                    )
-                                    .and_then(|e| e.first())
-                                    .unwrap_or(&"bin");
-                                    let fname = ap
-                                        .file_name
-                                        .clone()
-                                        .unwrap_or_else(|| format!("attachment.{ext}"));
-                                    let path = tmp_dir.path().join(&fname);
-                                    if let Err(e) = tokio::fs::write(&path, &data).await {
-                                        error!("failed to save attachment: {e}");
-                                    } else {
-                                        info!(path = %path.display(), "saved attachment");
+                while let Some(content) = messages.next().await {
+                    match content {
+                        Received::QueueEmpty => {
+                            println!("-- queue empty --");
+                            if stop_after_empty_queue {
+                                return Ok(());
+                            }
+                        }
+                        Received::Contacts => println!("-- contacts synced --"),
+                        Received::Content(content) => {
+                            print_content(&manager, &content, &format).await;
+
+                            // Save attachments
+                            if let ContentBody::DataMessage(DataMessage { attachments, .. }) =
+                                &content.body
+                            {
+                                for ap in attachments {
+                                    if let Ok(data) = manager.get_attachment(ap).await {
+                                        let ext = mime_guess::get_mime_extensions_str(
+                                            ap.content_type
+                                                .as_deref()
+                                                .unwrap_or("application/octet-stream"),
+                                        )
+                                        .and_then(|e| e.first())
+                                        .unwrap_or(&"bin");
+                                        let fname = ap
+                                            .file_name
+                                            .clone()
+                                            .unwrap_or_else(|| format!("attachment.{ext}"));
+                                        let path = tmp_dir.path().join(&fname);
+                                        if let Err(e) = tokio::fs::write(&path, &data).await {
+                                            error!("failed to save attachment: {e}");
+                                        } else {
+                                            info!(path = %path.display(), "saved attachment");
+                                        }
                                     }
                                 }
                             }
                         }
                     }
                 }
+
+                // Stream ended (websocket closed)
+                if stop_after_empty_queue {
+                    break;
+                }
+                tracing::warn!("message stream ended, reconnecting in 5s...");
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             }
         }
 
