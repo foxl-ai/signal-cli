@@ -124,9 +124,8 @@ async fn receive_silent<S: Store>(mut manager: Manager<S, Registered>) -> anyhow
     let messages = manager.receive_messages().await?;
     pin_mut!(messages);
     while let Some(content) = messages.next().await {
-        match content {
-            Received::QueueEmpty => break,
-            _ => {}
+        if let Received::QueueEmpty = content {
+            break;
         }
     }
     Ok(())

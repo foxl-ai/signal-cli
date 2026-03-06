@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 mod output;
 
 use anyhow::Context as _;
@@ -33,6 +34,7 @@ fn ensure_parent_dir_exists(path: &str) -> anyhow::Result<()> {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct JsonRpcRequest {
     jsonrpc: String,
     id: Option<Value>,
