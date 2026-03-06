@@ -32,7 +32,10 @@ pub fn print_result<T: Serialize + fmt::Display>(format: &OutputFormat, value: &
     match format {
         OutputFormat::Text => println!("{value}"),
         OutputFormat::Json => {
-            println!("{}", serde_json::to_string_pretty(value).unwrap_or_default());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(value).unwrap_or_default()
+            );
         }
     }
 }
@@ -68,11 +71,7 @@ pub struct JsonContact {
 
 impl fmt::Display for JsonContact {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{} / {:?} / {}",
-            self.uuid, self.phone_number, self.name
-        )
+        write!(f, "{} / {:?} / {}", self.uuid, self.phone_number, self.name)
     }
 }
 
@@ -90,11 +89,7 @@ impl fmt::Display for JsonGroup {
         write!(
             f,
             "{} {}: {:?} / revision {} / {} members",
-            self.master_key,
-            self.title,
-            self.description,
-            self.revision,
-            self.members_count,
+            self.master_key, self.title, self.description, self.revision, self.members_count,
         )
     }
 }
@@ -110,7 +105,11 @@ pub struct JsonDevice {
 
 impl fmt::Display for JsonDevice {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let current = if self.is_current { " (this device)" } else { "" };
+        let current = if self.is_current {
+            " (this device)"
+        } else {
+            ""
+        };
         write!(
             f,
             "- Device {}{}\n  Name: {}\n  Created: {}\n  Last seen: {}",

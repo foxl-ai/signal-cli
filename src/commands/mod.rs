@@ -10,10 +10,10 @@ use presage::libsignal_service::sender::AttachmentSpec;
 use presage::libsignal_service::zkgroup::GroupMasterKeyBytes;
 use presage::manager::{Registered, RegistrationOptions};
 use presage::model::messages::Received;
+use presage::proto::sync_message::Sent;
 use presage::proto::{EditMessage, SyncMessage};
 use presage::store::{ContentExt, Store};
 use presage::Manager;
-use presage::proto::sync_message::Sent;
 use std::path::PathBuf;
 use tempfile::{Builder, TempDir};
 use tokio::io::{self, AsyncBufReadExt, BufReader};
@@ -145,11 +145,13 @@ async fn print_content<S: Store>(
     let ts = content.timestamp();
 
     let (msg_type, body) = match &content.body {
-        ContentBody::DataMessage(DataMessage { body, .. }) => {
-            ("message", body.clone())
-        }
+        ContentBody::DataMessage(DataMessage { body, .. }) => ("message", body.clone()),
         ContentBody::SynchronizeMessage(SyncMessage {
-            sent: Some(Sent { message: Some(DataMessage { body, .. }), .. }),
+            sent:
+                Some(Sent {
+                    message: Some(DataMessage { body, .. }),
+                    ..
+                }),
             ..
         }) => ("sync", body.clone()),
         ContentBody::TypingMessage(_) => ("typing", None),
@@ -174,7 +176,11 @@ async fn print_content<S: Store>(
     print_result(format, &jm);
 }
 
-pub async fn run<S: Store + Send>(command: Command, store: S, format: OutputFormat) -> anyhow::Result<()> {
+pub async fn run<S: Store + Send>(
+    command: Command,
+    store: S,
+    format: OutputFormat,
+) -> anyhow::Result<()> {
     match command {
         Command::Register {
             servers,
@@ -328,7 +334,9 @@ pub async fn run<S: Store + Send>(command: Command, store: S, format: OutputForm
                             for ap in attachments {
                                 if let Ok(data) = manager.get_attachment(ap).await {
                                     let ext = mime_guess::get_mime_extensions_str(
-                                        ap.content_type.as_deref().unwrap_or("application/octet-stream"),
+                                        ap.content_type
+                                            .as_deref()
+                                            .unwrap_or("application/octet-stream"),
                                     )
                                     .and_then(|e| e.first())
                                     .unwrap_or(&"bin");
@@ -412,9 +420,12 @@ pub async fn run<S: Store + Send>(command: Command, store: S, format: OutputForm
             let manager = load_and_receive(store).await?;
             let whoami = manager.whoami().await?;
             match format {
-                OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-                    "uuid": whoami.aci.to_string(),
-                }))?),
+                OutputFormat::Json => println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "uuid": whoami.aci.to_string(),
+                    }))?
+                ),
                 OutputFormat::Text => println!("{whoami:?}"),
             }
         }
@@ -500,19 +511,55 @@ pub async fn run<S: Store + Send>(command: Command, store: S, format: OutputForm
             let pni = manager.store().pni_protocol_store();
 
             println!("ACI Pre-key stats:");
-            println!("  Next pre-key ID: {}", aci.next_pre_key_id().await.unwrap_or(0));
-            println!("  Next signed pre-key ID: {}", aci.next_signed_pre_key_id().await.unwrap_or(0));
-            println!("  Next kyber pre-key ID: {}", aci.next_pq_pre_key_id().await.unwrap_or(0));
-            println!("  Signed pre-keys: {}", aci.signed_pre_keys_count().await.unwrap_or(0));
-            println!("  Kyber pre-keys: {}", aci.kyber_pre_keys_count(false).await.unwrap_or(0));
-            println!("  Kyber last-resort: {}", aci.kyber_pre_keys_count(true).await.unwrap_or(0));
+            println!(
+                "  Next pre-key ID: {}",
+                aci.next_pre_key_id().await.unwrap_or(0)
+            );
+            println!(
+                "  Next signed pre-key ID: {}",
+                aci.next_signed_pre_key_id().await.unwrap_or(0)
+            );
+            println!(
+                "  Next kyber pre-key ID: {}",
+                aci.next_pq_pre_key_id().await.unwrap_or(0)
+            );
+            println!(
+                "  Signed pre-keys: {}",
+                aci.signed_pre_keys_count().await.unwrap_or(0)
+            );
+            println!(
+                "  Kyber pre-keys: {}",
+                aci.kyber_pre_keys_count(false).await.unwrap_or(0)
+            );
+            println!(
+                "  Kyber last-resort: {}",
+                aci.kyber_pre_keys_count(true).await.unwrap_or(0)
+            );
             println!("\nPNI Pre-key stats:");
-            println!("  Next pre-key ID: {}", pni.next_pre_key_id().await.unwrap_or(0));
-            println!("  Next signed pre-key ID: {}", pni.next_signed_pre_key_id().await.unwrap_or(0));
-            println!("  Next kyber pre-key ID: {}", pni.next_pq_pre_key_id().await.unwrap_or(0));
-            println!("  Signed pre-keys: {}", pni.signed_pre_keys_count().await.unwrap_or(0));
-            println!("  Kyber pre-keys: {}", pni.kyber_pre_keys_count(false).await.unwrap_or(0));
-            println!("  Kyber last-resort: {}", pni.kyber_pre_keys_count(true).await.unwrap_or(0));
+            println!(
+                "  Next pre-key ID: {}",
+                pni.next_pre_key_id().await.unwrap_or(0)
+            );
+            println!(
+                "  Next signed pre-key ID: {}",
+                pni.next_signed_pre_key_id().await.unwrap_or(0)
+            );
+            println!(
+                "  Next kyber pre-key ID: {}",
+                pni.next_pq_pre_key_id().await.unwrap_or(0)
+            );
+            println!(
+                "  Signed pre-keys: {}",
+                pni.signed_pre_keys_count().await.unwrap_or(0)
+            );
+            println!(
+                "  Kyber pre-keys: {}",
+                pni.kyber_pre_keys_count(false).await.unwrap_or(0)
+            );
+            println!(
+                "  Kyber last-resort: {}",
+                pni.kyber_pre_keys_count(true).await.unwrap_or(0)
+            );
         }
     }
 

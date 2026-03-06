@@ -28,10 +28,19 @@ pub struct Args {
     #[clap(long = "db-path", help = "Path to SQLite database")]
     pub db_path: Option<String>,
 
-    #[clap(long = "passphrase", short = 'p', help = "Passphrase to encrypt local storage")]
+    #[clap(
+        long = "passphrase",
+        short = 'p',
+        help = "Passphrase to encrypt local storage"
+    )]
     pub passphrase: Option<String>,
 
-    #[clap(long = "output", short = 'o', default_value = "text", help = "Output format")]
+    #[clap(
+        long = "output",
+        short = 'o',
+        default_value = "text",
+        help = "Output format"
+    )]
     pub output_format: OutputFormat,
 
     #[clap(subcommand)]
@@ -48,7 +57,10 @@ pub enum Command {
         phone_number: PhoneNumber,
         #[clap(long)]
         use_voice_call: bool,
-        #[clap(long, help = "Captcha from https://signalcaptchas.org/registration/generate.html")]
+        #[clap(
+            long,
+            help = "Captcha from https://signalcaptchas.org/registration/generate.html"
+        )]
         captcha: Url,
         #[clap(long, help = "Force re-registration")]
         force: bool,

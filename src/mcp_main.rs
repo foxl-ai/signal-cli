@@ -203,17 +203,12 @@ impl McpServer {
             None => return JsonRpcResponse::error(id, -32602, "missing params".into()),
         };
 
-        let tool_name = params
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
         let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
 
         let result = self.rt.block_on(async {
             let local = tokio::task::LocalSet::new();
-            local
-                .run_until(self.call_tool(tool_name, arguments))
-                .await
+            local.run_until(self.call_tool(tool_name, arguments)).await
         });
 
         match result {
@@ -290,10 +285,7 @@ impl McpServer {
                     let resolved = manager
                         .discover_contacts_by_phone_number(vec![phone])
                         .await?;
-                    let (_, identity) = resolved
-                        .into_iter()
-                        .next()
-                        .context("no CDSI result")?;
+                    let (_, identity) = resolved.into_iter().next().context("no CDSI result")?;
                     let service_id = identity.context("phone not registered on Signal")?;
 
                     let timestamp = std::time::SystemTime::now()
@@ -307,10 +299,16 @@ impl McpServer {
                     };
 
                     manager
-                        .send_message(service_id, ContentBody::DataMessage(data_message), timestamp)
+                        .send_message(
+                            service_id,
+                            ContentBody::DataMessage(data_message),
+                            timestamp,
+                        )
                         .await?;
 
-                    Ok(json!({ "status": "sent", "uuid": service_id.service_id_string(), "timestamp": timestamp }))
+                    Ok(
+                        json!({ "status": "sent", "uuid": service_id.service_id_string(), "timestamp": timestamp }),
+                    )
                 }
 
                 #[cfg(not(feature = "cdsi"))]
@@ -321,7 +319,8 @@ impl McpServer {
 
             "list_contacts" => {
                 let store = self.open_store().await?;
-                let manager: Manager<SqliteStore, Registered> = Manager::load_registered(store).await?;
+                let manager: Manager<SqliteStore, Registered> =
+                    Manager::load_registered(store).await?;
                 let contacts: Vec<Value> = manager
                     .store()
                     .contacts()
@@ -340,7 +339,8 @@ impl McpServer {
 
             "list_groups" => {
                 let store = self.open_store().await?;
-                let manager: Manager<SqliteStore, Registered> = Manager::load_registered(store).await?;
+                let manager: Manager<SqliteStore, Registered> =
+                    Manager::load_registered(store).await?;
                 let groups: Vec<Value> = ContentsStore::groups(manager.store())
                     .await?
                     .filter_map(Result::ok)
