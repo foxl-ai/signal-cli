@@ -23,7 +23,7 @@ fn init_logging() {
 }
 
 fn default_db_path() -> String {
-    ProjectDirs::from("org", "whisperfish", "signal-cli-rust")
+    ProjectDirs::from("org", "whisperfish", "signal-cli")
         .expect("could not determine config directory")
         .config_dir()
         .join("signal.db3")

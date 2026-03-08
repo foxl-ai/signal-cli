@@ -18,7 +18,7 @@ use std::time::UNIX_EPOCH;
 use tokio::runtime::Runtime;
 
 fn default_db_path() -> String {
-    ProjectDirs::from("org", "whisperfish", "signal-cli-rust")
+    ProjectDirs::from("org", "whisperfish", "signal-cli")
         .expect("could not determine config directory")
         .config_dir()
         .join("signal.db3")

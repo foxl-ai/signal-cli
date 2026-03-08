@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-REPO="didhd/signal-cli-rust"
+REPO="foxl-ai/signal-cli"
 INSTALL_DIR="/usr/local/bin"
 
 # Detect OS and architecture
