@@ -1,4 +1,4 @@
-# signal-cli-rust
+# signal-cli
 
 A lightweight, cross-platform Signal messenger CLI built in Rust on [libsignal](https://github.com/signalapp/libsignal) + [presage](https://github.com/whisperfish/presage). Includes an MCP server for AI integration.
 
@@ -7,38 +7,38 @@ A lightweight, cross-platform Signal messenger CLI built in Rust on [libsignal](
 ### One-liner (macOS / Linux)
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/didhd/signal-cli-rust/main/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/foxl-ai/signal-cli/main/install.sh | bash
 ```
 
 > Private repo? Use: `GITHUB_TOKEN=ghp_xxx curl -sSL ... | bash`
 
 ### macOS (DMG)
 
-Download the `.dmg` from [Releases](https://github.com/didhd/signal-cli-rust/releases), open it, and run `install.sh` inside.
+Download the `.dmg` from [Releases](https://github.com/foxl-ai/signal-cli/releases), open it, and run `install.sh` inside.
 
 ### Linux (Debian / Ubuntu)
 
 ```bash
 # Download .deb from releases
-sudo dpkg -i signal-cli-rust_*.deb
+sudo dpkg -i signal-cli_*.deb
 ```
 
 ### Linux (Fedora / RHEL)
 
 ```bash
 # Download .rpm from releases
-sudo rpm -i signal-cli-rust-*.rpm
+sudo rpm -i signal-cli-*.rpm
 ```
 
 ### Windows
 
-Download the `.zip` from [Releases](https://github.com/didhd/signal-cli-rust/releases), extract, and run `install.ps1` in PowerShell.
+Download the `.zip` from [Releases](https://github.com/foxl-ai/signal-cli/releases), extract, and run `install.ps1` in PowerShell.
 
 ### From source
 
 ```bash
 # Prerequisites: rust, cmake, protobuf
-cargo install --git https://github.com/didhd/signal-cli-rust.git
+cargo install --git https://github.com/foxl-ai/signal-cli.git
 ```
 
 ## Login (Connecting to your Signal account)

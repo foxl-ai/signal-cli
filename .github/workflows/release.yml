@@ -88,23 +88,23 @@ jobs:
           # Manual .deb if cargo-deb fails
           if [ ! -f target/${{ matrix.target }}/debian/*.deb ]; then
             VERSION="${GITHUB_REF_NAME#v}"
-            PKG_DIR="signal-cli-rust_${VERSION}_amd64"
+            PKG_DIR="signal-cli_${VERSION}_amd64"
             mkdir -p "${PKG_DIR}/DEBIAN"
             mkdir -p "${PKG_DIR}/usr/bin"
             cp target/${{ matrix.target }}/release/signal-cli "${PKG_DIR}/usr/bin/"
             cp target/${{ matrix.target }}/release/signal-mcp "${PKG_DIR}/usr/bin/"
             cat > "${PKG_DIR}/DEBIAN/control" << EOF
-          Package: signal-cli-rust
+          Package: signal-cli
           Version: ${VERSION}
           Section: net
           Priority: optional
           Architecture: amd64
-          Maintainer: didhd
+          Maintainer: foxl-ai
           Description: Lightweight Signal CLI in Rust with MCP support
            A cross-platform Signal messenger CLI built on libsignal/presage.
           EOF
             dpkg-deb --build "${PKG_DIR}"
-            mv "${PKG_DIR}.deb" "signal-cli-rust_${VERSION}_amd64.deb"
+            mv "${PKG_DIR}.deb" "signal-cli_${VERSION}_amd64.deb"
           fi
 
       # --- .rpm package (Linux only) ---
@@ -122,8 +122,8 @@ jobs:
             mkdir -p rpmbuild/BUILD/usr/bin
             cp target/${{ matrix.target }}/release/signal-cli rpmbuild/BUILD/usr/bin/
             cp target/${{ matrix.target }}/release/signal-mcp rpmbuild/BUILD/usr/bin/
-            cat > rpmbuild/SPECS/signal-cli-rust.spec << 'SPEC'
-          Name: signal-cli-rust
+            cat > rpmbuild/SPECS/signal-cli.spec << 'SPEC'
+          Name: signal-cli
           Version: VERSION_PLACEHOLDER
           Release: 1
           Summary: Lightweight Signal CLI in Rust
@@ -142,9 +142,9 @@ jobs:
           /usr/bin/signal-cli
           /usr/bin/signal-mcp
           SPEC
-            sed -i "s/VERSION_PLACEHOLDER/${VERSION}/" rpmbuild/SPECS/signal-cli-rust.spec
-            rpmbuild --define "_topdir $(pwd)/rpmbuild" -bb rpmbuild/SPECS/signal-cli-rust.spec
-            cp rpmbuild/RPMS/x86_64/*.rpm "signal-cli-rust-${VERSION}.x86_64.rpm" || true
+            sed -i "s/VERSION_PLACEHOLDER/${VERSION}/" rpmbuild/SPECS/signal-cli.spec
+            rpmbuild --define "_topdir $(pwd)/rpmbuild" -bb rpmbuild/SPECS/signal-cli.spec
+            cp rpmbuild/RPMS/x86_64/*.rpm "signal-cli-${VERSION}.x86_64.rpm" || true
           fi
 
       # --- DMG (macOS only) ---

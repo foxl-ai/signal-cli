@@ -1,5 +1,5 @@
 [package]
-name = "signal-cli-rust"
+name = "signal-cli"
 version = "0.1.0"
 edition = "2021"
 description = "A lightweight Signal CLI in Rust with MCP support"
@@ -46,7 +46,7 @@ quickcheck_async = { git = 'https://github.com/nytopop/quickcheck_async', rev = 
 libsqlite3-sys = { version = "0.36.0", git = "https://github.com/whisperfish/rusqlite", rev = '2a42b3354c9194700d08aa070f70a131a470e7dc' }
 
 [package.metadata.deb]
-maintainer = "didhd"
+maintainer = "foxl-ai"
 section = "net"
 priority = "optional"
 assets = [
