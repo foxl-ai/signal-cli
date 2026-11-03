@@ -11,12 +11,13 @@ use presage::libsignal_service::zkgroup::GroupMasterKeyBytes;
 use presage::manager::{Registered, RegistrationOptions};
 use presage::model::messages::Received;
 use presage::proto::sync_message::Sent;
-use presage::proto::{EditMessage, SyncMessage};
+use presage::proto::{attachment_pointer, AttachmentPointer, EditMessage, SyncMessage};
 use presage::store::{ContentExt, Store};
 use presage::Manager;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tempfile::{Builder, TempDir};
-use tokio::io::{self, AsyncBufReadExt, BufReader};
+use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::{debug, error, info};
 
 use crate::cli::Command;
@@ -135,6 +136,7 @@ async fn print_content<S: Store>(
     _manager: &Manager<S, Registered>,
     content: &Content,
     format: &OutputFormat,
+    attachments: Vec<JsonAttachment>,
 ) {
     let Ok(thread) = presage::store::Thread::try_from(content) else {
         return;
@@ -170,9 +172,168 @@ async fn print_content<S: Store>(
         thread: thread_str,
         body,
         r#type: msg_type.to_string(),
+        attachments,
     };
 
     print_result(format, &jm);
+}
+
+/// Every attachment gets its own name, also across messages that share a timestamp.
+static ATTACHMENT_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// The attachments a received message carries: one sent to this account, or one the account
+/// sent from another of its devices (a sync, e.g. Note to Self).
+fn attachments_of(content: &Content) -> &[AttachmentPointer] {
+    match &content.body {
+        ContentBody::DataMessage(DataMessage { attachments, .. }) => attachments,
+        ContentBody::SynchronizeMessage(SyncMessage {
+            sent:
+                Some(Sent {
+                    message: Some(DataMessage { attachments, .. }),
+                    ..
+                }),
+            ..
+        }) => attachments,
+        _ => &[],
+    }
+}
+
+/// `AttachmentPointer.Flags.VOICE_MESSAGE`: the sender's app recorded it as a voice message.
+fn is_voice_note(ap: &AttachmentPointer) -> bool {
+    ap.flags.unwrap_or(0) & (attachment_pointer::Flags::VoiceMessage as u32) != 0
+}
+
+/// The extension for a stated type: mime_guess's first one when it is short ASCII
+/// alphanumerics, else `bin`. The type is the sender's, so nothing else of it reaches a path.
+fn extension_for(content_type: Option<&str>) -> String {
+    let stated = content_type.unwrap_or("").trim();
+    // No type, or the generic one (whose first extension in mime_guess is "aaf"): plain bytes.
+    if stated.is_empty() || stated.eq_ignore_ascii_case(APPLICATION_OCTET_STREAM.as_ref()) {
+        return "bin".to_string();
+    }
+    mime_guess::get_mime_extensions_str(stated)
+        .and_then(|e| e.first().copied())
+        .filter(|e| !e.is_empty() && e.len() <= 8 && e.chars().all(|c| c.is_ascii_alphanumeric()))
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_else(|| "bin".to_string())
+}
+
+/// The name an attachment is saved under, chosen here and never taken from the sender: the
+/// sender's `file_name` is reported in the JSON as data only.
+fn attachment_file_name(timestamp: u64, seq: u64, extension: &str) -> String {
+    format!("{timestamp}-{seq}.{extension}")
+}
+
+/// Where an attachment is saved: directly inside `dir`, whatever the sender wrote.
+fn attachment_path(
+    dir: &std::path::Path,
+    timestamp: u64,
+    seq: u64,
+    ap: &AttachmentPointer,
+) -> std::path::PathBuf {
+    dir.join(attachment_file_name(
+        timestamp,
+        seq,
+        &extension_for(ap.content_type.as_deref()),
+    ))
+}
+
+/// Download and save every attachment of `content` into `dir`, each under a fresh name, never
+/// writing through anything already at that path. Returns what was saved, for the message's
+/// JSON; a download or write that fails is logged and left out.
+async fn save_attachments<S: Store>(
+    manager: &Manager<S, Registered>,
+    content: &Content,
+    dir: &std::path::Path,
+) -> Vec<JsonAttachment> {
+    let mut saved = Vec::new();
+    for ap in attachments_of(content) {
+        let data = match manager.get_attachment(ap).await {
+            Ok(data) => data,
+            Err(e) => {
+                error!("failed to download attachment: {e}");
+                continue;
+            }
+        };
+        let seq = ATTACHMENT_SEQ.fetch_add(1, Ordering::Relaxed);
+        let path = attachment_path(dir, content.timestamp(), seq, ap);
+        let written = async {
+            let mut file = tokio::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .await?;
+            file.write_all(&data).await?;
+            file.flush().await
+        }
+        .await;
+        match written {
+            Ok(()) => {
+                info!(path = %path.display(), "saved attachment");
+                saved.push(JsonAttachment {
+                    path: path.display().to_string(),
+                    content_type: ap.content_type.clone(),
+                    file_name: ap.file_name.clone(),
+                    size: data.len() as u64,
+                    voice_note: is_voice_note(ap),
+                });
+            }
+            Err(e) => error!("failed to save attachment: {e}"),
+        }
+    }
+    saved
+}
+
+#[cfg(test)]
+mod attachment_name_tests {
+    use super::*;
+
+    #[test]
+    fn the_saved_name_is_generated_never_the_senders() {
+        let name = attachment_file_name(1758844800123, 7, "ogg");
+        assert_eq!(name, "1758844800123-7.ogg");
+        let dir = std::path::Path::new("/tmp/signal-cli-attachments-x");
+        // Whatever the sender called the file, the path stays a direct child of the directory.
+        assert_eq!(dir.join(&name).parent(), Some(dir));
+        assert!(!name.contains('/') && !name.contains('\\') && !name.contains(".."));
+    }
+
+    #[test]
+    fn a_senders_file_name_never_leaves_the_directory() {
+        let dir = std::path::Path::new("/tmp/signal-cli-attachments-x");
+        for name in [
+            "/Users/someone/Library/LaunchAgents/x.plist",
+            "../../../.zshrc",
+            "..",
+            "a/b/c.jpg",
+            "voice-message.ogg",
+        ] {
+            let ap = AttachmentPointer {
+                file_name: Some(name.to_string()),
+                content_type: Some("audio/ogg".to_string()),
+                ..Default::default()
+            };
+            let path = attachment_path(dir, 1758844800123, 0, &ap);
+            assert_eq!(path.parent(), Some(dir), "{name} -> {}", path.display());
+            let expected = format!("1758844800123-0.{}", extension_for(Some("audio/ogg")));
+            assert_eq!(
+                path.file_name().and_then(|n| n.to_str()),
+                Some(expected.as_str()),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_extension_is_short_ascii_or_bin() {
+        // mime_guess's own first extension for the type (audio/ogg is "oga" there).
+        assert!(["oga", "ogg"].contains(&extension_for(Some("audio/ogg")).as_str()));
+        assert_eq!(extension_for(Some("audio/aac")), "aac");
+        assert_eq!(extension_for(Some("image/jpeg")).len() <= 8, true);
+        assert_eq!(extension_for(None), "bin");
+        assert_eq!(extension_for(Some("../../etc/passwd")), "bin");
+        assert_eq!(extension_for(Some("x/unknown-type")), "bin");
+    }
 }
 
 pub async fn run<S: Store + Send>(
@@ -341,34 +502,11 @@ pub async fn run<S: Store + Send>(
                         }
                         Received::Contacts => println!("-- contacts synced --"),
                         Received::Content(content) => {
-                            print_content(&manager, &content, &format).await;
-
-                            // Save attachments
-                            if let ContentBody::DataMessage(DataMessage { attachments, .. }) =
-                                &content.body
-                            {
-                                for ap in attachments {
-                                    if let Ok(data) = manager.get_attachment(ap).await {
-                                        let ext = mime_guess::get_mime_extensions_str(
-                                            ap.content_type
-                                                .as_deref()
-                                                .unwrap_or("application/octet-stream"),
-                                        )
-                                        .and_then(|e| e.first())
-                                        .unwrap_or(&"bin");
-                                        let fname = ap
-                                            .file_name
-                                            .clone()
-                                            .unwrap_or_else(|| format!("attachment.{ext}"));
-                                        let path = tmp_dir.path().join(&fname);
-                                        if let Err(e) = tokio::fs::write(&path, &data).await {
-                                            error!("failed to save attachment: {e}");
-                                        } else {
-                                            info!(path = %path.display(), "saved attachment");
-                                        }
-                                    }
-                                }
-                            }
+                            // Saved FIRST, so every path printed with the message exists when a
+                            // reader acts on it.
+                            let attachments =
+                                save_attachments(&manager, &content, tmp_dir.path()).await;
+                            print_content(&manager, &content, &format, attachments).await;
                         }
                     }
                 }
@@ -436,7 +574,7 @@ pub async fn run<S: Store + Send>(
                 .await?
                 .filter_map(Result::ok)
             {
-                print_content(&manager, &msg, &format).await;
+                print_content(&manager, &msg, &format, Vec::new()).await;
             }
         }
 

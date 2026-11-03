@@ -96,7 +96,23 @@ signal-cli receive
 
 # Receive and exit when queue is empty
 signal-cli receive -q
+
+# One JSON object per message
+signal-cli -o json receive
 ```
+
+Attachments that `receive` gets are saved under generated names (`<timestamp>-<n>.<ext>`) in a private
+temporary directory, before the message is printed, and listed with it:
+
+```json
+"attachments": [
+  { "path": "/tmp/signal-cli-attachmentsXXXX/1758844800123-0.oga", "content_type": "audio/ogg",
+    "file_name": "voice-note.ogg", "size": 10228, "voice_note": true }
+]
+```
+
+`file_name` is the name the sender gave the file, reported as data only. The directory is removed when
+`receive` exits.
 
 ### List contacts and groups
 

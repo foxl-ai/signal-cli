@@ -40,6 +40,22 @@ pub fn print_result<T: Serialize + fmt::Display>(format: &OutputFormat, value: &
     }
 }
 
+/// An attachment `receive` saved, reported with the message it came in.
+#[derive(Serialize)]
+pub struct JsonAttachment {
+    /// Where it was saved: a name this CLI chose (`<timestamp>-<n>.<ext>`) inside its own
+    /// attachments directory. Never derived from anything the sender wrote.
+    pub path: String,
+    /// The sender's stated type, as received.
+    pub content_type: Option<String>,
+    /// The sender's name for the file, as DATA only: it is never used to build a path.
+    pub file_name: Option<String>,
+    /// Bytes saved.
+    pub size: u64,
+    /// The sender's app recorded it as a voice message (AttachmentPointer.Flags.VOICE_MESSAGE).
+    pub voice_note: bool,
+}
+
 #[derive(Serialize)]
 pub struct JsonMessage {
     pub timestamp: u64,
@@ -47,6 +63,9 @@ pub struct JsonMessage {
     pub thread: String,
     pub body: Option<String>,
     pub r#type: String,
+    /// Left out when there are none, so a message without attachments prints as before.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<JsonAttachment>,
 }
 
 impl fmt::Display for JsonMessage {
@@ -58,7 +77,18 @@ impl fmt::Display for JsonMessage {
             self.sender,
             self.thread,
             self.body.as_deref().unwrap_or("")
-        )
+        )?;
+        for a in &self.attachments {
+            write!(
+                f,
+                "\n  attachment{}: {} ({}, {} bytes)",
+                if a.voice_note { " (voice message)" } else { "" },
+                a.path,
+                a.content_type.as_deref().unwrap_or("unknown type"),
+                a.size
+            )?;
+        }
+        Ok(())
     }
 }
 
